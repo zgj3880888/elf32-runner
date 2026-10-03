@@ -1,0 +1,19 @@
+// Top-level build file
+//
+// 注意：不要在这里写 allprojects { repositories { ... } }。
+// settings.gradle 里设了 RepositoriesMode.FAIL_ON_PROJECT_REPOS，
+// Gradle 7+ 会把「在 project 上声明 repositories」判为错误，构建直接中止。
+// 所有仓库统一由 settings.gradle 的 dependencyResolutionManagement 提供。
+buildscript {
+    repositories {
+        google()
+        mavenCentral()
+    }
+    dependencies {
+        classpath 'com.android.tools.build:gradle:8.5.2'
+    }
+}
+
+tasks.register('clean', Delete) {
+    delete rootProject.layout.buildDirectory
+}

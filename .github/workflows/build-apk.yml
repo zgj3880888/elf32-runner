@@ -1,0 +1,109 @@
+name: Build APK
+
+# 本机没有 Android SDK，构建全部交给 GitHub Actions：
+# push 到主分支或打 v* 标签时自动编译 APK，v* 标签还会自动发 Release。
+on:
+  push:
+    branches: [main, master]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      # ---------------------------------------------------------------
+      # ① 语义自检（构建门槛）
+      #    APK 能编译通过 ≠ 解释器逻辑正确。先跑与 Java 版本逐行等价的
+      #    Python 实现，验证 A32 解码语义，不通过就不往下走到构建。
+      # ---------------------------------------------------------------
+      - name: 配置 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 引擎语义自检
+        run: python3 verify_engine.py
+
+      # ---------------------------------------------------------------
+      # ② 构建环境
+      #    AGP 8.5.2 要求 JDK 17（不是 11，也不是 8）。
+      # ---------------------------------------------------------------
+      - name: 配置 JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: 配置 Gradle 缓存
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: 接受 Android SDK 许可
+        run: |
+          if [ -n "$ANDROID_HOME" ]; then
+            mkdir -p "$ANDROID_HOME/licenses"
+            # 标准 SDK 许可哈希，避免 AGP 下载 platform/build-tools 时卡在交互确认
+            printf '8933bad161af4178f1180d1a19aa4c76\n' > "$ANDROID_HOME/licenses/android-sdk-license" || true
+            printf '60401af5c6f26a5a99d47b9e4a9e5f61\n' > "$ANDROID_HOME/licenses/android-sdk-preview-license" || true
+          fi
+          yes 2>/dev/null | sdkmanager --licenses >/dev/null 2>&1 || true
+          echo "ANDROID_HOME=$ANDROID_HOME"
+
+      # ---------------------------------------------------------------
+      # ③ 编译 Release APK（开启混淆与资源压缩）
+      # ---------------------------------------------------------------
+      - name: 编译 Release APK
+        run: |
+          chmod +x ./gradlew
+          ./gradlew assembleRelease --no-daemon --stacktrace
+
+      # ---------------------------------------------------------------
+      # ④ 产物检查与体积报告
+      #    不要仅凭 gradle 退出码判断成功，检查 APK 文件是否真的存在。
+      # ---------------------------------------------------------------
+      - name: 校验产物并输出体积
+        run: |
+          APK=$(find app/build/outputs/apk/release -name "*.apk" | head -1)
+          if [ -z "$APK" ]; then
+            echo "::error::未找到 APK 产物，构建失败"
+            exit 1
+          fi
+          SIZE=$(stat -c%s "$APK")
+          echo "APK: $APK"
+          echo "体积: $SIZE 字节 ($(echo "scale=1; $SIZE/1024" | bc) KB)"
+          echo "### 📦 构建产物" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| 项目 | 值 |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|---|---|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| 文件 | \`$(basename "$APK")\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| 体积 | $(echo "scale=1; $SIZE/1024" | bc) KB |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| 架构 | universal (纯 Java，无 native so) |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| API 级别 | minSdk 21 / targetSdk 34 |" >> "$GITHUB_STEP_SUMMARY"
+          mkdir -p out && cp "$APK" out/elf32-runner-release.apk
+
+      - name: 上传 APK 产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: elf32-runner-apk
+          path: app/build/outputs/apk/release/*.apk
+          if-no-files-found: error
+
+      # ---------------------------------------------------------------
+      # ⑤ 打标签时自动发 Release
+      #    注意：要先推分支再推标签，只推标签的话 Release 页点源码会 404。
+      # ---------------------------------------------------------------
+      - name: 发布 Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: app/build/outputs/apk/release/*.apk
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

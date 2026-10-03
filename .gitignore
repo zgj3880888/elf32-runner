@@ -1,0 +1,10 @@
+# 项目级配置：Git 忽略构建产物与本地配置
+*.iml
+.gradle/
+local.properties
+.idea/
+.DS_Store
+build/
+captures/
+.externalNativeBuild/
+.cxx/
