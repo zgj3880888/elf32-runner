@@ -16,9 +16,20 @@ android {
 
     buildTypes {
         release {
+            // 混淆 + 资源压缩：这是 APK 能压到 12 KB 级别的主要原因
             minifyEnabled true
             shrinkResources true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+
+            // CI 上没有正式签名密钥，先用 Gradle 自动生成的 debug keystore 签名。
+            // 不加这一行，assembleRelease 产出的是 *-unsigned.apk，手机拒绝安装。
+            //
+            // 上架前务必替换成自己的正式密钥：
+            //   1. keytool -genkey -v -keystore release.jks -keyalg RSA -keysize 2048 \
+            //         -validity 10000 -alias elf32
+            //   2. 在 signingConfigs 里配 release{}
+            //   3. 密钥文件千万不要丢 —— 丢了就永远无法再更新这个应用。
+            signingConfig signingConfigs.debug
         }
     }
 

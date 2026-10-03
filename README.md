@@ -210,20 +210,48 @@ elf32-runner/
 
 ## 验证记录
 
-本机（无 Android SDK）通过 Python 做了**逐指令集的等价验证**（与 Java 版完全相同的
-译码与语义逻辑）：
+### 最新一轮：在真实 JVM 上运行 APK 里那份 Java 源码
+
+`engine/` 包刻意不引用任何 `android.*` 类（只用 `java.io.PrintStream`），因此可以在
+没有 Android SDK 的机器上直接 `javac` 编译并运行 —— 验证的是**会被打进 APK 的那份本体**，
+而不是它的某个等价改写。
+
+```bash
+javac -encoding UTF-8 -d build/host \
+    app/src/main/java/com/example/elf32runner/engine/*.java \
+    tools/host/HostMain.java
+java -Dfile.encoding=UTF-8 -cp build/host HostMain
+```
+
+```
+[通过] hello_arm32   输出="Hello from ARM32!\n"   r0=0
+[通过] sum_1_10      输出=""                      r0=55
+```
+
+这同样挂成了 GitHub Actions 的构建门槛：语义不过就不许出包。
+
+### 三种错误，按危险程度排序
+
+| # | 错误 | 现象 | 谁抓到的 |
+|---|---|---|---|
+| 1 | 第二操作数的移位量形式取了 **bit7**，ARM 规范应是 **bit4**（bit4=0=移位量立即数，=1=来自 Rs） | 编译通过；`add r0,r0,r1` 的移位量变成上一次的 `r[0]`，`sum_1_10` 算成 **101 而非 55** | **只有真跑才发现** —— Python 等价实现因为结构不同完全没复现 |
+| 2 | 移位量 `>= 32` 未处理 | 不报错，但 Java 移位只取低 5 位，与 ARM 规定（LSL/LSR 得 0、ASR 得符号位）不符 | 代码审查 + `shifted()` 加了保护分支 |
+| 3 | `carryOut` 写成 `boolean`、`shiftImm` 写成 `int` | javac 直接报 9 处 `incompatible types` | GitHub Actions 第一次构建 |
+
+第一条是本记录的重点：**类型性错误编译器会拦，手写译码器的位域错误不会**。
+
+### 更早：本机 Python 等价验证
+
+本机（无 Android SDK）曾通过 Python 做了逐指令集的等价验证：
 
 - `hello_arm32`：正确输出 `Hello from ARM32!`（7 条指令）
-- `sum_1_10`：累加 1..10 = 55，含 `add`（立即数/寄存器）、`cmp`+`bne`（条件分支）、
-  `svc`（exit），43 步正确完成
+- `sum_1_10`：累加 1..10 = 55，含 `add`（立即数/寄存器）、`cmp`+`bne`（条件分支）、`svc`，43 步完成
 
-过程中发现并修复了两个关键 bug：
+期间发现两个 bug：**访存指令 bit25 语义与数据处理指令相反**（数据处理 bit25=1 是立即数，
+ldr/str 则是 bit25=**0** 才是立即数偏移），以及 **`ldr` 立即数偏移本身就是字节偏移、不要再乘 4**。
 
-1. **访存指令的 bit25 语义与数据处理指令相反**：数据处理指令 bit25=1 是立即数，
-   但访存（ldr/str）bit25=0 才是立即数偏移、bit25=1 是寄存器偏移。混淆会导致
-   `ldr [pc, #imm]` 被误判为寄存器寻址。
-2. **立即数偏移直接用字节偏移，不乘 4**：`imm12` 字段本身存的就是字节偏移，
-   编码器负责保证字访问 4 字节对齐，解释器不需要再乘。
+> 教训：这套 Python 验证抓不到上面的第 1 条错误。等价实现给的是"检查 another 实现是否正确"，
+> 不是"检查本体"。能跑本体就一定要跑本体。
 
 ---
 
