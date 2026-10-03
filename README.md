@@ -109,29 +109,52 @@ AArch32 执行状态的设备上，这个解释器**就是**"32 位模拟器"—
 
 ## 如何编译
 
-本机（Windows，仅有 JRE 1.8）**没有** Android SDK / JDK，无法直接编出 APK。
-在任意装好 Android Studio 的机器上：
+### 方式一：GitHub Actions 云端构建（推荐，零本地环境）
+
+本机（Windows，仅有 JRE 1.8）**没有** Android SDK / JDK 17，所以构建交给 GitHub Actions。
+推送到 `main` 即自动编译，`v*` 标签还会自动发 Release：
 
 ```bash
-# 1. 打开本目录（elf32-runner/）
-# 2. 确认 local.properties 的 sdk.dir 指向你的 SDK，或删掉让 AS 自动配
-# 3. 点 Build → Build APK(s)，或命令行：
-./gradlew assembleDebug
-# 产物在 app/build/outputs/apk/debug/app-debug.apk
+git push origin main          # 触发构建
+git tag -a v1.0.0 -m "首版"   # 可选：同时发 Release 并把 APK 挂上去
+git push origin v1.0.0        # 注意：务必先推分支，再推标签
 ```
 
-或直接命令行（需已配好 SDK + JDK 17）：
+产物在 Actions 页面 → 最新一次运行 → **Artifacts** → `elf32-runner-apk`。
+打标签的话，APK 会直接出现在 Releases 页面。
+
+本地想看結果不用等邮件：
 
 ```bash
-cd elf32-runner
-echo "sdk.dir=/path/to/Android/Sdk" > local.properties
-./gradlew assembleDebug
+export GH_TOKEN=<你的 GitHub 令牌>
+python3 tools/actions_watch.py 480     # 轮询到构建结束，失败自动存 build-logs.zip
 ```
+
+工作流要点（踩过的坑，别改回去）：
+
+| 项 | 为什么 |
+|---|---|
+| **JDK 17**（非 8/11） | AGP 8.5.2 的硬要求，低版本直接报不支持的类文件版本 |
+| **`.gitattributes` 锁 `gradlew` 为 LF** | 一旦混进 CRLF，Linux 上跑 `./gradlew` 报 `env: 'bash\r': No such file or directory` |
+| **根 `build.gradle` 不写 `allprojects { repositories }`** | `settings.gradle` 用了 `RepositoriesMode.FAIL_ON_PROJECT_REPOS`，两者冲突会让 Gradle 立刻中止，报 "Build was configured to prefer settings repositories over project repositories" |
+| **先验 `verify_engine.py` 再编译** | APK 编译通过 ≠ 解释器语义正确。语义自检是构建门槛，不过直接 fail，省得编出一个跑错结果的包 |
+| **判成败看 APK 文件是否存在** | 不只依赖 gradle 退出码 |
+
+### 方式二：本地 Android Studio
+
+任意装了 Android SDK + JDK 17 的机器上：
+
+```bash
+./gradlew assembleDebug     # 产物 app/build/outputs/apk/debug/app-debug.apk
+./gradlew assembleRelease   # 产物 app/build/outputs/apk/release/app-release.apk
+```
+
+> `local.properties` 含本机 SDK 绝对路径，已在 `.gitignore` 里，不要提交。
 
 安装到设备：
 
 ```bash
-adb install app/build/outputs/apk/debug/app-debug.apk
+adb install app/build/outputs/apk/release/app-release.apk
 ```
 
 ---

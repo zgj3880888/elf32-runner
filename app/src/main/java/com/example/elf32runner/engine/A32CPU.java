@@ -259,6 +259,17 @@ public final class A32CPU {
     // 桶形移位器
     // ---------------------------------------------------------------------
     private int shifted(int val, int type, int sh) {
+        // 保护：Java 的移位运算只取移位量的低 5 位，而 ARM 规定移位量 >= 32 时
+        // LSL/LSR 结果为 0、ASR 结果为符号位。不处理的话这里不会报错、但结果静默出错。
+        if (sh >= 32) {
+            switch (type) {
+                case 0: return 0;                              // LSL
+                case 1: return 0;                              // LSR
+                case 2: return (val >> 31);                    // ASR：全符号位
+                case 3: return Integer.rotateRight(val, sh & 31); // ROR：按 32 取模
+                default: return val;
+            }
+        }
         switch (type) {
             case 0: return val << sh;                       // LSL
             case 1: return val >>> sh;                       // LSR（逻辑）
@@ -287,7 +298,9 @@ public final class A32CPU {
 
         // 第二操作数
         int operand2;
-        boolean carryOut = c;   // 默认 C 保持不变（逻辑指令）
+        // carryOut 必须是 int 而非 boolean：ARM 的进位 C 是一个 0/1 位值，
+        // 最终要写回到 this.c（同样是 int），用 boolean 会产生类型不兼容。
+        int carryOut = c;   // 默认 C 保持不变（逻辑指令）
         if (imm) {
             int imm8 = word & 0xFF;
             int rot = ((word >>> 8) & 0xF) * 2;
@@ -295,12 +308,19 @@ public final class A32CPU {
             if (rot != 0) carryOut = (operand2 >>> 31) & 1;
         } else {
             int rm = word & 0xF;
-            int shiftImm = ((word >>> 7) & 1) != 0;
+            // ARM 数据处理指令第二操作数的两种形式（bit25=0 时），由 bit4 决定：
+            //   bit4=0 → 移位量是**立即数**，编码在 bits 11-7
+            //   bit4=1 → 移位量来自**寄存器 Rs**，编码在 bits 11-8
+            // 常见写法 add r0,r0,r1 属于第一种且 shift_imm=0，此时 operand2 就是 r[rm]。
+            // 注意别拿 bit7 当标志（它只是移位量立即数的最低位），否则普通寄存器
+            // 操作数会被误判成寄存器移位，移位量变成上一次的某个寄存器值，
+            // 结果静默错乱（实测 sum_1_10 得 101 而非 55）。
+            boolean regShift = ((word >>> 4) & 1) != 0;
             int type;
             int sh;
-            if (shiftImm) {
+            if (!regShift) {
                 type = (word >>> 5) & 0x3;
-                int sh5 = (word >>> 7) & 0x1F;
+                int sh5 = (word >>> 7) & 0x1F;   // 移位量立即数：bits 11-7
                 if (sh5 == 0) {
                     // LSL #0 = 不移位，C 不变
                     operand2 = r[rm];

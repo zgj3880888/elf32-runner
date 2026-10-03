@@ -8,3 +8,6 @@ build/
 captures/
 .externalNativeBuild/
 .cxx/
+
+# tools/actions_watch.py 拉取失败构建的日志产物，属于本地诊断垃圾
+build-logs.zip
